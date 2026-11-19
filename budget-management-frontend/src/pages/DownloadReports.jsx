@@ -1,6 +1,6 @@
 
 import { useEffect, useRef, useState } from "react";
-import { Download, FileText, FileDown, RefreshCw } from "lucide-react";
+import { FileText, FileDown, RefreshCw, ChevronDown, ChevronUp, Building2 } from "lucide-react";
 import api from "../api/axios";
 import { loadActiveMinistryContext } from "../services/budgetContext";
 import { saveAs } from "file-saver";
@@ -76,6 +76,7 @@ export default function DownloadReports() {
   const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState("");
   const [error, setError] = useState("");
+  const [expandedOffices, setExpandedOffices] = useState({});
 
   const loadData = async () => {
     try {
@@ -332,6 +333,25 @@ export default function DownloadReports() {
     ),
   };
 
+  // Start with a concise office overview. Project rows remain available on demand.
+  const officeSummaries = [...rows.reduce((grouped, row) => {
+    if (row.type !== "PROJECT") return grouped;
+    const key = row.officeName;
+    if (!grouped.has(key)) grouped.set(key, { officeName: key, projects: [] });
+    grouped.get(key).projects.push(row);
+    return grouped;
+  }, new Map()).values()].sort((a, b) => a.officeName.localeCompare(b.officeName));
+
+  const officeTotals = [...rows.reduce((grouped, row) => {
+    if (row.type === "UNTRACKED") return grouped;
+    const key = row.officeName;
+    if (!grouped.has(key)) grouped.set(key, { officeName: key, allocated: 0, expenditure: 0 });
+    const office = grouped.get(key);
+    office.allocated += Number(row.allocated || 0);
+    office.expenditure += Number(row.expenditure || 0);
+    return grouped;
+  }, new Map()).values()].sort((a, b) => a.officeName.localeCompare(b.officeName));
+
   const remaining =
     totals.trackedAllocation - totals.expenditure;
 
@@ -442,23 +462,10 @@ export default function DownloadReports() {
       ];
 
       const officeRows = [
-        makeRow(
-          [
-            "অফিস",
-            "বাজেট",
-            "উৎস",
-            "বরাদ্দ",
-            "নির্বাচিত সময়ের ব্যয়",
-          ],
-          true
-        ),
-        ...rows
-          .filter((item) => item.type !== "UNTRACKED")
-          .map((item) =>
+        makeRow(["অফিস", "মোট বরাদ্দ (নির্বাচিত অর্থবছর)", "নির্বাচিত সময়ের ব্যয়"], true),
+        ...officeTotals.map((item) =>
             makeRow([
               item.officeName,
-              item.categoryName,
-              item.sourceName,
               money(item.allocated),
               money(item.expenditure),
             ])
@@ -754,6 +761,37 @@ export default function DownloadReports() {
         )}
       </div>
 
+      <section className="report-office-section">
+        <div className="report-section-heading">
+          <div className="report-heading-icon"><Building2 size={19} /></div>
+          <div>
+            <h2>Projects by assigned office</h2>
+            <p>{officeSummaries.length} offices · {officeSummaries.reduce((n, office) => n + office.projects.length, 0)} projects</p>
+          </div>
+        </div>
+        <div className="report-table-scroll">
+          <table className="report-summary-table">
+            <thead><tr><th>Assigned office</th><th>Projects</th><th>Total budget</th><th>Spending in selected period</th><th className="report-action-heading">Details</th></tr></thead>
+            {officeSummaries.length ? officeSummaries.map((office) => {
+              const allocated = office.projects.reduce((sum, project) => sum + project.allocated, 0);
+              const spent = office.projects.reduce((sum, project) => sum + Number(project.expenditure || 0), 0);
+              const expanded = !!expandedOffices[office.officeName];
+              return <tbody key={office.officeName}>
+                <tr className="report-office-row">
+                  <td><strong>{office.officeName}</strong></td><td><span className="report-count">{office.projects.length}</span></td>
+                  <td className="report-money">৳ {money(allocated)}</td><td className="report-money">৳ {money(spent)}</td>
+                  <td className="report-action-cell"><button className="report-details-button" aria-expanded={expanded} onClick={() => setExpandedOffices((current) => ({ ...current, [office.officeName]: !current[office.officeName] }))}>{expanded ? "Hide" : "Details"}{expanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}</button></td>
+                </tr>
+                {expanded && <tr className="report-detail-row"><td colSpan="5"><div className="report-project-list">
+                  <div className="report-project-header"><span>Project</span><span>Budget</span><span>Spending</span></div>
+                  {office.projects.map((project) => <div className="report-project-line" key={project.id}><span>{project.itemName || "Unnamed project"}</span><span>৳ {money(project.allocated)}</span><span>৳ {money(project.expenditure)}</span></div>)}
+                </div></td></tr>}
+              </tbody>;
+            }) : <tbody><tr><td className="report-empty" colSpan="5">No assigned projects found for this fiscal year.</td></tr></tbody>}
+          </table>
+        </div>
+      </section>
+
       <div
         ref={reportRef}
         style={{
@@ -816,6 +854,7 @@ export default function DownloadReports() {
           <thead>
             <tr>
               <th style={styles.th}>বাজেট</th>
+              <th style={styles.th}>Source</th>
               <th style={styles.th}>বরাদ্দকৃত অর্থ</th>
               <th style={styles.th}>নির্বাচিত সময় পর্যন্ত ব্যয়</th>
               <th style={styles.th}>অবশিষ্ট অর্থের পরিমাণ</th>
@@ -823,9 +862,10 @@ export default function DownloadReports() {
             </tr>
           </thead>
           <tbody>
-            {categoryData.map((item) => (
+            {categoryData.filter((item) => item.code !== "DEVELOPMENT").map((item) => (
               <tr key={item.id}>
                 <td style={styles.td}>{item.name}</td>
+                <td style={styles.td}>—</td>
                 <td style={styles.td}>{money(item.allocated)}</td>
                 <td style={styles.td}>
                   {item.expenditure === null
@@ -845,11 +885,21 @@ export default function DownloadReports() {
               </tr>
             ))}
 
+            {developmentSources.length > 0 && (() => {
+              const total = categoryData.find((item) => item.code === "DEVELOPMENT");
+              if (!total) return null;
+              return <tr key="development-total">
+                <td style={{ ...styles.td, verticalAlign: "middle", fontWeight: 600 }} rowSpan={developmentSources.length + 1}>{total.name}</td>
+                <td style={{ ...styles.td, fontWeight: 600 }}>Total</td>
+                <td style={{ ...styles.td, fontWeight: 600 }}>{money(total.allocated)}</td>
+                <td style={{ ...styles.td, fontWeight: 600 }}>{total.expenditure === null ? "—" : money(total.expenditure)}</td>
+                <td style={{ ...styles.td, fontWeight: 600 }}>{total.remaining === null ? "—" : money(total.remaining)}</td>
+                <td style={{ ...styles.td, fontWeight: 600 }}>{total.remaining === null ? "—" : percent(total.remaining, total.allocated)}</td>
+              </tr>;
+            })()}
             {developmentSources.map((item) => (
               <tr key={item.sourceCode}>
-                <td style={styles.td}>
-                  উন্নয়ন বাজেট — {item.sourceCode}
-                </td>
+                <td style={styles.td}>{item.sourceCode}</td>
                 <td style={styles.td}>{money(item.allocated)}</td>
                 <td style={styles.td}>{money(item.expenditure)}</td>
                 <td style={styles.td}>
@@ -865,7 +915,7 @@ export default function DownloadReports() {
             ))}
 
             <tr>
-              <td style={{ ...styles.td, fontWeight: 700 }}>
+              <td colSpan={2} style={{ ...styles.td, fontWeight: 700 }}>
                 ট্র্যাককৃত ব্যয়ের সর্বমোট
               </td>
               <td style={styles.td}>
@@ -888,20 +938,14 @@ export default function DownloadReports() {
           <thead>
             <tr>
               <th style={styles.th}>অফিস</th>
-              <th style={styles.th}>বাজেট</th>
-              <th style={styles.th}>উৎস</th>
-              <th style={styles.th}>বরাদ্দ</th>
+              <th style={styles.th}>মোট বরাদ্দ (নির্বাচিত অর্থবছর)</th>
               <th style={styles.th}>নির্বাচিত সময়ের ব্যয়</th>
             </tr>
           </thead>
           <tbody>
-            {rows
-              .filter((item) => item.type !== "UNTRACKED")
-              .map((item) => (
-                <tr key={item.id}>
+            {officeTotals.map((item) => (
+                <tr key={item.officeName}>
                   <td style={styles.td}>{item.officeName}</td>
-                  <td style={styles.td}>{item.categoryName}</td>
-                  <td style={styles.td}>{item.sourceName}</td>
                   <td style={styles.td}>{money(item.allocated)}</td>
                   <td style={styles.td}>{money(item.expenditure)}</td>
                 </tr>
