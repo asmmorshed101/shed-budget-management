@@ -9,14 +9,15 @@ import {
 import api from "../api/axios";
 import StatCard from "../components/StatCard";
 import { loadActiveMinistryContext } from "../services/budgetContext";
+import { amountInBangla } from "../utils/banglaAmount";
 
 
 const formatMoney = (amount) =>
-  new Intl.NumberFormat("en-BD", {
+  `${new Intl.NumberFormat("bn-BD", {
     style: "currency",
     currency: "BDT",
     maximumFractionDigits: 2,
-  }).format(amount ?? 0);
+  }).format(amount ?? 0)} (${amountInBangla(amount)})`;
 
 const getArray = (data) => {
   if (Array.isArray(data)) return data;

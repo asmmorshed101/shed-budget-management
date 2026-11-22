@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { FileText, FileDown, RefreshCw, ChevronDown, ChevronUp, Building2 } from "lucide-react";
 import api from "../api/axios";
 import { loadActiveMinistryContext } from "../services/budgetContext";
+import { amountInBangla } from "../utils/banglaAmount";
 import { saveAs } from "file-saver";
 import html2pdf from "html2pdf.js";
 import {
@@ -25,10 +26,23 @@ const getArray = (data) => {
   return [];
 };
 
+const banglaNumber = (value) => String(value ?? "").replace(/[0-9]/g, (digit) =>
+  "০১২৩৪৫৬৭৮৯"[Number(digit)]
+);
+
 const money = (value) =>
-  new Intl.NumberFormat("en-BD", {
+  `${new Intl.NumberFormat("bn-BD", {
     maximumFractionDigits: 2,
-  }).format(Number(value || 0));
+  }).format(Number(value || 0))} (${amountInBangla(value)})`;
+
+const displayDate = (dateValue) => {
+  if (!dateValue) return "";
+  const [year, month, day] = String(dateValue).split("-").map(Number);
+  if (!year || !month || !day) return banglaNumber(dateValue);
+  return new Intl.DateTimeFormat("bn-BD", {
+    day: "numeric", month: "long", year: "numeric", timeZone: "UTC",
+  }).format(new Date(Date.UTC(year, month - 1, day)));
+};
 
 const localDate = (date) => {
   const y = date.getFullYear();
@@ -373,7 +387,7 @@ export default function DownloadReports() {
 
   const percent = (value, allocated) =>
     allocated > 0
-      ? `${((value / allocated) * 100).toFixed(2)}%`
+      ? `${new Intl.NumberFormat("bn-BD", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format((value / allocated) * 100)}%`
       : "—";
 
   const validDates = fromDate && toDate && fromDate <= toDate;
@@ -519,7 +533,7 @@ export default function DownloadReports() {
                 alignment: AlignmentType.CENTER,
                 children: [
                   new TextRun({
-                    text: `প্রতিবেদনকাল: ${fromDate} থেকে ${toDate}`,
+                    text: `প্রতিবেদনকাল: ${displayDate(fromDate)} থেকে ${displayDate(toDate)}`,
                     font: "Noto Sans Bengali",
                     size: 22,
                   }),
@@ -718,6 +732,7 @@ export default function DownloadReports() {
             <br />
             <input
               type="date"
+              lang="bn-BD"
               style={styles.input}
               value={fromDate}
               min={activeFiscalYear?.startDate || undefined}
@@ -731,6 +746,7 @@ export default function DownloadReports() {
             <br />
             <input
               type="date"
+              lang="bn-BD"
               style={styles.input}
               value={toDate}
               min={fromDate}
@@ -829,7 +845,7 @@ export default function DownloadReports() {
         </div>
 
         <h2 style={{ textAlign: "center", fontSize: "20px" }}>
-          {fromDate} থেকে {toDate} পর্যন্ত বাজেট বাস্তবায়ন প্রতিবেদন
+          {displayDate(fromDate)} থেকে {displayDate(toDate)} পর্যন্ত বাজেট বাস্তবায়ন প্রতিবেদন
         </h2>
         <p style={{ textAlign: "center", marginBottom: "20px" }}>
           (অঙ্কসমূহ টাকা)
@@ -949,7 +965,7 @@ export default function DownloadReports() {
             <div className="report-heading-icon"><Building2 size={19} /></div>
             <div>
               <h2>Projects by assigned office</h2>
-              <p>{officeSummaries.length} offices · {officeSummaries.reduce((n, office) => n + office.projects.length, 0)} projects</p>
+              <p>{banglaNumber(officeSummaries.length)} offices · {banglaNumber(officeSummaries.reduce((n, office) => n + office.projects.length, 0))} projects</p>
             </div>
           </div>
           <div className="report-table-scroll">
@@ -961,13 +977,13 @@ export default function DownloadReports() {
                 const expanded = !!expandedOffices[office.officeName];
                 return <tbody key={office.officeName}>
                   <tr className="report-office-row">
-                    <td><strong>{office.officeName}</strong></td><td><span className="report-count">{office.projects.length}</span></td>
+                    <td><strong>{banglaNumber(office.officeName)}</strong></td><td><span className="report-count">{banglaNumber(office.projects.length)}</span></td>
                     <td className="report-money">৳ {money(allocated)}</td><td className="report-money">৳ {money(spent)}</td>
                     <td className="report-action-cell"><button className="report-details-button" aria-expanded={expanded} onClick={() => setExpandedOffices((current) => ({ ...current, [office.officeName]: !current[office.officeName] }))}>{expanded ? "Hide" : "Details"}{expanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}</button></td>
                   </tr>
                   {expanded && <tr className="report-detail-row"><td colSpan="5"><div className="report-project-list">
                     <div className="report-project-header"><span>Project</span><span>Budget</span><span>Spending</span></div>
-                    {office.projects.map((project) => <div className="report-project-line" key={project.id}><span>{project.itemName || "Unnamed project"}</span><span>৳ {money(project.allocated)}</span><span>৳ {money(project.expenditure)}</span></div>)}
+                    {office.projects.map((project) => <div className="report-project-line" key={project.id}><span>{banglaNumber(project.itemName || "Unnamed project")}</span><span>৳ {money(project.allocated)}</span><span>৳ {money(project.expenditure)}</span></div>)}
                   </div></td></tr>}
                 </tbody>;
               }) : <tbody><tr><td className="report-empty" colSpan="5">No assigned projects found for this fiscal year.</td></tr></tbody>}
