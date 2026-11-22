@@ -70,6 +70,7 @@ public class SecurityConfig {
         var path = request.getRequestURI();
         return path.startsWith("/api/v1/reports/") || path.startsWith("/api/v1/development-budget-summary")
             || path.startsWith("/api/v1/dashboard/")
+            || path.matches("/api/v1/budget-categories/[0-9]+/expenditures")
             || path.matches("/api/v1/(fiscal-years|organizations/hierarchy|budget-sources/[0-9]+/offices|budget-categories/[0-9]+/sources|office-allocations/[0-9]+/projects|projects/[0-9]+/expenditures|office-allocations/[0-9]+/expenditures|ministry-budgets/by-fiscal-year|ministry-budgets/[0-9]+/categories)");
     }
 
@@ -77,9 +78,11 @@ public class SecurityConfig {
         var path = request.getRequestURI();
         var user = users.findByEmailIgnoreCase(email).orElse(null);
         if (user == null) return false;
-        if ("POST".equals(request.getMethod()) && path.matches("/api/v1/projects/[0-9]+/expenditures"))
+        if (("POST".equals(request.getMethod()) || "PUT".equals(request.getMethod()))
+                && path.matches("/api/v1/projects/[0-9]+/expenditures(/[0-9]+)?"))
             return user.getAssignedProjectId() != null && path.split("/")[4].equals(user.getAssignedProjectId().toString());
-        if ("POST".equals(request.getMethod()) && path.matches("/api/v1/office-allocations/[0-9]+/expenditures"))
+        if (("POST".equals(request.getMethod()) || "PUT".equals(request.getMethod()))
+                && path.matches("/api/v1/office-allocations/[0-9]+/expenditures(/[0-9]+)?"))
             return user.getAssignedOfficeAllocationId() != null && path.split("/")[4].equals(user.getAssignedOfficeAllocationId().toString());
         if ("PUT".equals(request.getMethod()) && path.matches("/api/v1/projects/[0-9]+/head-budgets"))
             return user.getAssignedProjectId() != null && path.split("/")[4].equals(user.getAssignedProjectId().toString());

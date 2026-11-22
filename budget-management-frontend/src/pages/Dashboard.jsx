@@ -252,6 +252,10 @@ export default function Dashboard() {
                   <strong>{formatMoney(dashboard.sedpBudget)}</strong>
                 </div>
                 <div>
+                  <span>SEDP Expenditure</span>
+                  <strong>{formatMoney(dashboard.sedpExpenditure)}</strong>
+                </div>
+                <div>
                   <span>Development Budget</span>
                   <strong>{formatMoney(dashboard.developmentBudget)}</strong>
                 </div>

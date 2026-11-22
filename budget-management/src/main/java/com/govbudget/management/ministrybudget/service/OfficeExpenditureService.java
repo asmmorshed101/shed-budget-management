@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -174,6 +175,67 @@ public class OfficeExpenditureService {
         return historyRepository
                 .findByOfficeBudgetAllocationIdOrderByReportDateDescIdDesc(
                         allocationId);
+    }
+
+    @Transactional
+    public OfficeExpenditureHistory update(Long allocationId, Long historyId,
+            CumulativeExpenditureRequest request) {
+        OfficeBudgetAllocation allocation = allocationRepository.findById(allocationId)
+                .orElseThrow(() -> new IllegalArgumentException("Office allocation not found"));
+        OfficeExpenditureHistory record = historyRepository.findById(historyId)
+                .filter(item -> item.getOfficeBudgetAllocationId().equals(allocationId))
+                .orElseThrow(() -> new IllegalArgumentException("Office expenditure entry not found"));
+        if (request.reportDate() == null || request.amount() == null
+                || request.amount().compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("Invalid expenditure report");
+        }
+        if (request.expenseHeadId() == null) {
+            throw new IllegalArgumentException("Budget Head is required");
+        }
+        ExpenseHead head = expenseHeadRepository.findById(request.expenseHeadId())
+                .orElseThrow(() -> new IllegalArgumentException("Budget Head not found"));
+        if (!Boolean.TRUE.equals(head.getActive())
+                && !request.expenseHeadId().equals(record.getExpenseHeadId())) {
+            throw new IllegalArgumentException("Budget Head is not active");
+        }
+
+        record.setReportDate(request.reportDate());
+        record.setIncrementalAmount(request.amount());
+        record.setRemarks(request.remarks());
+        record.setExpenseHeadId(request.expenseHeadId());
+        List<OfficeExpenditureHistory> history = historyRepository
+                .findByOfficeBudgetAllocationIdOrderByReportDateDescIdDesc(allocationId);
+        BigDecimal legacyTotal = history.stream()
+                .filter(item -> item.getExpenseHeadId() == null)
+                .max(Comparator.comparing(OfficeExpenditureHistory::getReportDate)
+                        .thenComparing(OfficeExpenditureHistory::getId))
+                .map(OfficeExpenditureHistory::getCumulativeAmount)
+                .orElse(BigDecimal.ZERO);
+        Map<Long, BigDecimal> cumulativeByHead = new HashMap<>();
+        history.sort(Comparator.comparing(OfficeExpenditureHistory::getReportDate)
+                .thenComparing(OfficeExpenditureHistory::getId));
+        for (OfficeExpenditureHistory item : history) {
+            Long headId = item.getExpenseHeadId();
+            if (headId == null) continue;
+            BigDecimal next = cumulativeByHead.getOrDefault(headId, BigDecimal.ZERO)
+                    .add(item.getIncrementalAmount() == null ? BigDecimal.ZERO : item.getIncrementalAmount());
+            cumulativeByHead.put(headId, next);
+            item.setCumulativeAmount(next);
+        }
+        BigDecimal total = cumulativeByHead.values().stream().reduce(BigDecimal.ZERO, BigDecimal::add).add(legacyTotal);
+        if (total.compareTo(allocation.getAllocatedAmount()) > 0) {
+            throw new IllegalArgumentException("Total expenditure exceeds office allocation");
+        }
+        if (budgetHeadAllocationService.hasOfficeHeadAllocations(allocationId)) {
+            var headLimit = budgetHeadAllocationService.getOfficeHeadLimit(allocationId, request.expenseHeadId());
+            if (headLimit.isPresent()) {
+                if (cumulativeByHead.getOrDefault(request.expenseHeadId(), BigDecimal.ZERO).compareTo(headLimit.get()) > 0) {
+                    throw new IllegalArgumentException("Expenditure exceeds the amount assigned to this Budget Head");
+                }
+            }
+        }
+        historyRepository.saveAll(history);
+        return record;
     }
 
     private void validateExpenseHead(Long expenseHeadId) {

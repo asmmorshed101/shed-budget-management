@@ -1,5 +1,6 @@
 
 import { useEffect, useMemo, useState } from "react";
+import { Edit2, X } from "lucide-react";
 import api from "../api/axios";
 import { useAuth } from "../auth/AuthContext";
 import { loadActiveMinistryContext } from "../services/budgetContext";
@@ -38,6 +39,7 @@ export default function ExpenditureEntry() {
 
   const [projectAllocations, setProjectAllocations] = useState([]);
   const [officeAllocations, setOfficeAllocations] = useState([]);
+  const [sedpCategory, setSedpCategory] = useState(null);
 
   const [selectedProjectAllocation, setSelectedProjectAllocation] =
     useState("");
@@ -48,6 +50,7 @@ export default function ExpenditureEntry() {
   const [selectedProject, setSelectedProject] = useState("");
 
   const [history, setHistory] = useState([]);
+  const [editingRecordId, setEditingRecordId] = useState(null);
 
   const [expenseHeads, setExpenseHeads] = useState([]);
   const [selectedHead, setSelectedHead] = useState("");
@@ -133,6 +136,7 @@ export default function ExpenditureEntry() {
           `/ministry-budgets/${budget.id}/categories`
         );
         const categories = getArray(categoryResponse.data);
+        setSedpCategory(categories.find((item) => item.categoryCode === "SEDP") || null);
 
         const projectCategory = categories.find(
           (item) => item.categoryCode === "DEVELOPMENT"
@@ -262,6 +266,11 @@ export default function ExpenditureEntry() {
     [expenseHeads]
   );
 
+  const editingRecord = history.find((item) => item.id === editingRecordId);
+  const formHeads = editingRecord && !activeHeads.some((head) => String(head.id) === String(editingRecord.expenseHeadId))
+    ? [...activeHeads, ...expenseHeads.filter((head) => String(head.id) === String(editingRecord.expenseHeadId))]
+    : activeHeads;
+
   // History may contain heads that were deactivated later, so look up in all heads
   const headLabel = (head) => `${head.code} - ${head.nameBn || head.name}`;
 
@@ -323,8 +332,11 @@ export default function ExpenditureEntry() {
   // Load expenditure history
   useEffect(() => {
     const loadHistory = async () => {
-      const id =
-        activeTab === "PROJECT" ? selectedProject : selectedOfficeAllocation;
+      const id = activeTab === "PROJECT"
+        ? selectedProject
+        : activeTab === "OFFICE"
+          ? selectedOfficeAllocation
+          : sedpCategory?.id;
 
       if (!id) {
         setHistory([]);
@@ -335,10 +347,11 @@ export default function ExpenditureEntry() {
         setHistoryLoading(true);
         setError("");
 
-        const endpoint =
-          activeTab === "PROJECT"
-            ? `/projects/${id}/expenditures`
-            : `/office-allocations/${id}/expenditures`;
+        const endpoint = activeTab === "PROJECT"
+          ? `/projects/${id}/expenditures`
+          : activeTab === "OFFICE"
+            ? `/office-allocations/${id}/expenditures`
+            : `/budget-categories/${id}/expenditures`;
 
         const response = await api.get(endpoint);
         setHistory(getArray(response.data));
@@ -351,7 +364,7 @@ export default function ExpenditureEntry() {
     };
 
     loadHistory();
-  }, [activeTab, selectedProject, selectedOfficeAllocation]);
+  }, [activeTab, selectedProject, selectedOfficeAllocation, sedpCategory]);
 
   const currentHistory = history;
 
@@ -379,7 +392,9 @@ export default function ExpenditureEntry() {
   const allocatedAmount = Number(
     activeTab === "PROJECT"
       ? selectedProjectData?.allocatedAmount || 0
-      : selectedOfficeAllocationData?.allocatedAmount || 0
+      : activeTab === "OFFICE"
+        ? selectedOfficeAllocationData?.allocatedAmount || 0
+        : sedpCategory?.totalAmount || 0
   );
 
   // Total expenditure = latest cumulative amount of every head,
@@ -393,6 +408,7 @@ export default function ExpenditureEntry() {
     allocatedAmount - totalCurrentExpenditure,
     0
   );
+  const availableForEntry = remainingBudget + Number(editingRecord?.incrementalAmount || 0);
 
   const enteredDailyAmount = Number(dailyAmount || 0);
 
@@ -401,14 +417,19 @@ export default function ExpenditureEntry() {
     setError("");
     setSuccess("");
 
-    const targetId =
-      activeTab === "PROJECT" ? selectedProject : selectedOfficeAllocation;
+    const targetId = activeTab === "PROJECT"
+      ? selectedProject
+      : activeTab === "OFFICE"
+        ? selectedOfficeAllocation
+        : sedpCategory?.id;
 
     if (!targetId) {
       setError(
         activeTab === "PROJECT"
           ? "Please select a project."
-          : "Please select an office allocation."
+          : activeTab === "OFFICE"
+            ? "Please select an office allocation."
+            : "No SEDP allocation is available for this fiscal year."
       );
       return;
     }
@@ -428,9 +449,9 @@ export default function ExpenditureEntry() {
       return;
     }
 
-    if (enteredDailyAmount > remainingBudget) {
+    if (enteredDailyAmount > availableForEntry) {
       setError(
-        `Expenditure amount cannot exceed the remaining overall budget (${money(remainingBudget)}).`
+        `Expenditure amount cannot exceed the available overall budget (${money(availableForEntry)}).`
       );
       return;
     }
@@ -438,22 +459,29 @@ export default function ExpenditureEntry() {
     try {
       setSaving(true);
 
-      const endpoint =
-        activeTab === "PROJECT"
-          ? `/projects/${targetId}/expenditures`
-          : `/office-allocations/${targetId}/expenditures`;
+      const endpoint = activeTab === "PROJECT"
+        ? `/projects/${targetId}/expenditures`
+        : activeTab === "OFFICE"
+          ? `/office-allocations/${targetId}/expenditures`
+          : `/budget-categories/${targetId}/expenditures`;
 
-      await api.post(endpoint, {
+      const payload = {
         reportDate,
         amount: enteredDailyAmount,
         remarks,
         expenseHeadId: Number(selectedHead),
-      });
+      };
+      if (editingRecordId) {
+        await api.put(`${endpoint}/${editingRecordId}`, payload);
+      } else {
+        await api.post(endpoint, payload);
+      }
 
-      setSuccess("Expenditure report submitted successfully.");
+      setSuccess(editingRecordId ? "Expenditure updated successfully." : "Expenditure report submitted successfully.");
       setDailyAmount("");
       setRemarks("");
       setSelectedHead("");
+      setEditingRecordId(null);
 
       const response = await api.get(endpoint);
       setHistory(getArray(response.data));
@@ -471,6 +499,27 @@ export default function ExpenditureEntry() {
     setDailyAmount("");
     setRemarks("");
     setSelectedHead("");
+    setEditingRecordId(null);
+  };
+
+  const startEditing = (item) => {
+    setEditingRecordId(item.id);
+    setReportDate(item.reportDate);
+    setDailyAmount(String(item.incrementalAmount || ""));
+    setRemarks(item.remarks || "");
+    setSelectedHead(item.expenseHeadId == null ? "" : String(item.expenseHeadId));
+    setError("");
+    setSuccess("");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const cancelEditing = () => {
+    setEditingRecordId(null);
+    setDailyAmount("");
+    setRemarks("");
+    setSelectedHead("");
+    setReportDate(new Date().toISOString().slice(0, 10));
+    setError("");
   };
 
   const styles = {
@@ -586,6 +635,13 @@ export default function ExpenditureEntry() {
         >
           Office Expenditure
         </button>}
+        {user?.role === "SUPER_ADMIN" && sedpCategory && <button
+          type="button"
+          style={styles.tab(activeTab === "SEDP")}
+          onClick={() => changeTab("SEDP")}
+        >
+          SEDP Expenditure
+        </button>}
       </div>
 
       {error && (
@@ -618,7 +674,9 @@ export default function ExpenditureEntry() {
         <h2 style={{ fontSize: "18px", marginTop: 0, marginBottom: "20px" }}>
           {activeTab === "PROJECT"
             ? "Project Expenditure Information"
-            : "Office Expenditure Information"}
+            : activeTab === "OFFICE"
+              ? "Office Expenditure Information"
+              : "SEDP Expenditure Information"}
         </h2>
 
         <div style={styles.grid}>
@@ -630,7 +688,7 @@ export default function ExpenditureEntry() {
                   style={styles.input}
                   value={selectedProjectAllocation}
                   onChange={(e) =>
-                    setSelectedProjectAllocation(e.target.value)
+                    { cancelEditing(); setSelectedProjectAllocation(e.target.value); }
                   }
                 >
                   <option value="">Select office allocation</option>
@@ -652,7 +710,7 @@ export default function ExpenditureEntry() {
                   <select
                     style={styles.input}
                     value={selectedProject}
-                    onChange={(e) => setSelectedProject(e.target.value)}
+                    onChange={(e) => { cancelEditing(); setSelectedProject(e.target.value); }}
                     disabled={!projects.length}
                   >
                     <option value="">Select project</option>
@@ -665,13 +723,13 @@ export default function ExpenditureEntry() {
                 )}
               </div>
             </>
-          ) : (
+          ) : activeTab === "OFFICE" ? (
             <div>
               <label style={styles.label}>Office Allocation</label>
               <select
                 style={styles.input}
                 value={selectedOfficeAllocation}
-                onChange={(e) => setSelectedOfficeAllocation(e.target.value)}
+                onChange={(e) => { cancelEditing(); setSelectedOfficeAllocation(e.target.value); }}
                 disabled={isAssignedOfficeAdmin}
               >
                 <option value="">Select office allocation</option>
@@ -681,6 +739,13 @@ export default function ExpenditureEntry() {
                   </option>
                 ))}
               </select>
+            </div>
+          ) : (
+            <div>
+              <label style={styles.label}>SEDP Allocation</label>
+              <div style={{ ...styles.input, background: "#f8fafc" }}>
+                {sedpCategory?.categoryName} — {activeFiscalYear?.name}
+              </div>
             </div>
           )}
         </div>
@@ -700,7 +765,7 @@ export default function ExpenditureEntry() {
 
       <div style={{ ...styles.card, marginTop: "20px" }}>
         <h2 style={{ fontSize: "18px", marginTop: 0, marginBottom: "20px" }}>
-          Submit Expenditure Report
+          {editingRecordId ? "Edit Expenditure Report" : "Submit Expenditure Report"}
         </h2>
 
         <form onSubmit={handleSubmit}>
@@ -712,13 +777,13 @@ export default function ExpenditureEntry() {
                 value={selectedHead}
                 onChange={(e) => {
                   setSelectedHead(e.target.value);
-                  setDailyAmount("");
+                  if (!editingRecordId) setDailyAmount("");
                   setError("");
                 }}
                 required
               >
                 <option value="">Select budget head</option>
-                {activeHeads.map((head) => (
+                {formHeads.map((head) => (
                   <option key={head.id} value={head.id}>
                     {headLabel(head)}
                   </option>
@@ -742,7 +807,7 @@ export default function ExpenditureEntry() {
               <input
                 type="number"
                 min="0.01"
-                max={remainingBudget}
+                max={availableForEntry}
                 step="0.01"
                 style={styles.input}
                 value={dailyAmount}
@@ -776,12 +841,15 @@ export default function ExpenditureEntry() {
                 !(
                   activeTab === "PROJECT"
                     ? selectedProject
-                    : selectedOfficeAllocation
+                    : activeTab === "OFFICE"
+                      ? selectedOfficeAllocation
+                      : sedpCategory?.id
                 )
               }
             >
-              {saving ? "Submitting..." : "Submit Expenditure"}
+              {saving ? (editingRecordId ? "Saving..." : "Submitting...") : (editingRecordId ? "Save Changes" : "Submit Expenditure")}
             </button>
+            {editingRecordId && <button type="button" onClick={cancelEditing} style={{ ...styles.button, marginLeft: "10px", background: "#64748b" }} disabled={saving}><X size={16} /> Cancel Edit</button>}
           </div>
         </form>
       </div>
@@ -806,6 +874,7 @@ export default function ExpenditureEntry() {
                   <th style={styles.th}>Budget Head</th>
                   <th style={styles.th}>Expenditure Amount</th>
                   <th style={styles.th}>Remarks</th>
+                  <th style={styles.th}>Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -819,6 +888,11 @@ export default function ExpenditureEntry() {
                       {money(item.incrementalAmount)}
                     </td>
                     <td style={styles.td}>{item.remarks || "—"}</td>
+                    <td style={styles.td}>
+                      {user?.role !== "USER" && <button type="button" onClick={() => startEditing(item)} style={{ display: "inline-flex", alignItems: "center", gap: "6px", padding: "7px 10px", border: "1px solid #cbd5e1", borderRadius: "6px", background: "#fff", color: "#1d4ed8", fontWeight: 600 }}>
+                        <Edit2 size={14} /> Edit
+                      </button>}
+                    </td>
                   </tr>
                 ))}
               </tbody>

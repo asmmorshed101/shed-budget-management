@@ -39,7 +39,8 @@ const localDate = (date) => {
 
 const periodExpense = (history, from, to) => {
   const records = [...history].sort((a, b) =>
-    String(a.reportDate).localeCompare(String(b.reportDate))
+    String(a.reportDate).localeCompare(String(b.reportDate)) ||
+    Number(a.id || 0) - Number(b.id || 0)
   );
 
   const closing = records
@@ -53,6 +54,19 @@ const periodExpense = (history, from, to) => {
   return Math.max(
     Number(closing?.cumulativeAmount || 0) -
       Number(opening?.cumulativeAmount || 0),
+    0
+  );
+};
+
+const periodExpenseByHead = (history, from, to) => {
+  const byHead = new Map();
+  history.forEach((record) => {
+    const key = record.expenseHeadId == null ? "LEGACY" : String(record.expenseHeadId);
+    if (!byHead.has(key)) byHead.set(key, []);
+    byHead.get(key).push(record);
+  });
+  return [...byHead.values()].reduce(
+    (sum, records) => sum + periodExpense(records, from, to),
     0
   );
 };
@@ -147,6 +161,9 @@ export default function DownloadReports() {
         }
 
         if (code === "SEDP") {
+          const historyResponse = await api.get(
+            `/budget-categories/${category.id}/expenditures`
+          );
           result.push({
             id: `SEDP-${category.id}`,
             categoryCode: code,
@@ -156,8 +173,10 @@ export default function DownloadReports() {
             officeName: "—",
             itemName: categoryLabel(code, category.categoryName),
             allocated: Number(category.totalAmount || 0),
-            expenditure: null,
-            type: "UNTRACKED",
+            expenditure: periodExpenseByHead(
+              getArray(historyResponse.data), fromDate, toDate
+            ),
+            type: "CATEGORY",
           });
           continue;
         }
@@ -280,13 +299,10 @@ export default function DownloadReports() {
         ? Number(category.totalAmount || 0)
         : Number(category.totalAmount || 0);
 
-    const expenditure =
-      code === "SEDP"
-        ? null
-        : matchingRows.reduce(
-            (sum, item) => sum + Number(item.expenditure || 0),
-            0
-          );
+    const expenditure = matchingRows.reduce(
+      (sum, item) => sum + Number(item.expenditure || 0),
+      0
+    );
 
     return {
       id: category.id,
@@ -343,7 +359,7 @@ export default function DownloadReports() {
   }, new Map()).values()].sort((a, b) => a.officeName.localeCompare(b.officeName));
 
   const officeTotals = [...rows.reduce((grouped, row) => {
-    if (row.type === "UNTRACKED") return grouped;
+    if (row.type === "UNTRACKED" || row.type === "CATEGORY") return grouped;
     const key = row.officeName;
     if (!grouped.has(key)) grouped.set(key, { officeName: key, allocated: 0, expenditure: 0 });
     const office = grouped.get(key);
@@ -561,7 +577,7 @@ export default function DownloadReports() {
                 children: [
                   new TextRun({
                     text:
-                      "দ্রষ্টব্য: SEDP-এর ব্যয়ের তথ্য বর্তমান সিস্টেমে সংরক্ষিত নেই; তাই এই অংশের ব্যয় ও অবশিষ্ট অর্থ হিসাব করা হয়নি।",
+                      "দ্রষ্টব্য: SEDP-এর ব্যয় বাজেট হেড অনুযায়ী নথিভুক্ত করা হয়।",
                     font: "Noto Sans Bengali",
                     size: 18,
                   }),
@@ -761,37 +777,6 @@ export default function DownloadReports() {
         )}
       </div>
 
-      <section className="report-office-section">
-        <div className="report-section-heading">
-          <div className="report-heading-icon"><Building2 size={19} /></div>
-          <div>
-            <h2>Projects by assigned office</h2>
-            <p>{officeSummaries.length} offices · {officeSummaries.reduce((n, office) => n + office.projects.length, 0)} projects</p>
-          </div>
-        </div>
-        <div className="report-table-scroll">
-          <table className="report-summary-table">
-            <thead><tr><th>Assigned office</th><th>Projects</th><th>Total budget</th><th>Spending in selected period</th><th className="report-action-heading">Details</th></tr></thead>
-            {officeSummaries.length ? officeSummaries.map((office) => {
-              const allocated = office.projects.reduce((sum, project) => sum + project.allocated, 0);
-              const spent = office.projects.reduce((sum, project) => sum + Number(project.expenditure || 0), 0);
-              const expanded = !!expandedOffices[office.officeName];
-              return <tbody key={office.officeName}>
-                <tr className="report-office-row">
-                  <td><strong>{office.officeName}</strong></td><td><span className="report-count">{office.projects.length}</span></td>
-                  <td className="report-money">৳ {money(allocated)}</td><td className="report-money">৳ {money(spent)}</td>
-                  <td className="report-action-cell"><button className="report-details-button" aria-expanded={expanded} onClick={() => setExpandedOffices((current) => ({ ...current, [office.officeName]: !current[office.officeName] }))}>{expanded ? "Hide" : "Details"}{expanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}</button></td>
-                </tr>
-                {expanded && <tr className="report-detail-row"><td colSpan="5"><div className="report-project-list">
-                  <div className="report-project-header"><span>Project</span><span>Budget</span><span>Spending</span></div>
-                  {office.projects.map((project) => <div className="report-project-line" key={project.id}><span>{project.itemName || "Unnamed project"}</span><span>৳ {money(project.allocated)}</span><span>৳ {money(project.expenditure)}</span></div>)}
-                </div></td></tr>}
-              </tbody>;
-            }) : <tbody><tr><td className="report-empty" colSpan="5">No assigned projects found for this fiscal year.</td></tr></tbody>}
-          </table>
-        </div>
-      </section>
-
       <div
         ref={reportRef}
         style={{
@@ -930,6 +915,10 @@ export default function DownloadReports() {
           </tbody>
         </table>
 
+        <p style={{ fontSize: "12px", marginTop: "18px" }}>
+          দ্রষ্টব্য: SEDP-এর ব্যয় বাজেট হেড অনুযায়ী নথিভুক্ত করা হয়।
+        </p>
+
         <h3 style={{ textAlign: "center", marginTop: "25px" }}>
           অফিসভিত্তিক বিস্তারিত ব্যয়
         </h3>
@@ -953,11 +942,38 @@ export default function DownloadReports() {
           </tbody>
         </table>
 
-        <p style={{ fontSize: "12px", marginTop: "18px" }}>
-          দ্রষ্টব্য: SEDP-এর ব্যয়ের তথ্য বর্তমান সিস্টেমে সংরক্ষিত নেই।
-          তাই SEDP-এর ব্যয় ও অবশিষ্ট অর্থের হিসাব করা হয়নি।
-        </p>
       </div>
+
+        <section className="report-office-section">
+          <div className="report-section-heading">
+            <div className="report-heading-icon"><Building2 size={19} /></div>
+            <div>
+              <h2>Projects by assigned office</h2>
+              <p>{officeSummaries.length} offices · {officeSummaries.reduce((n, office) => n + office.projects.length, 0)} projects</p>
+            </div>
+          </div>
+          <div className="report-table-scroll">
+            <table className="report-summary-table">
+              <thead><tr><th>Assigned office</th><th>Projects</th><th>Total budget</th><th>Spending in selected period</th><th className="report-action-heading">Details</th></tr></thead>
+              {officeSummaries.length ? officeSummaries.map((office) => {
+                const allocated = office.projects.reduce((sum, project) => sum + project.allocated, 0);
+                const spent = office.projects.reduce((sum, project) => sum + Number(project.expenditure || 0), 0);
+                const expanded = !!expandedOffices[office.officeName];
+                return <tbody key={office.officeName}>
+                  <tr className="report-office-row">
+                    <td><strong>{office.officeName}</strong></td><td><span className="report-count">{office.projects.length}</span></td>
+                    <td className="report-money">৳ {money(allocated)}</td><td className="report-money">৳ {money(spent)}</td>
+                    <td className="report-action-cell"><button className="report-details-button" aria-expanded={expanded} onClick={() => setExpandedOffices((current) => ({ ...current, [office.officeName]: !current[office.officeName] }))}>{expanded ? "Hide" : "Details"}{expanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}</button></td>
+                  </tr>
+                  {expanded && <tr className="report-detail-row"><td colSpan="5"><div className="report-project-list">
+                    <div className="report-project-header"><span>Project</span><span>Budget</span><span>Spending</span></div>
+                    {office.projects.map((project) => <div className="report-project-line" key={project.id}><span>{project.itemName || "Unnamed project"}</span><span>৳ {money(project.allocated)}</span><span>৳ {money(project.expenditure)}</span></div>)}
+                  </div></td></tr>}
+                </tbody>;
+              }) : <tbody><tr><td className="report-empty" colSpan="5">No assigned projects found for this fiscal year.</td></tr></tbody>}
+            </table>
+          </div>
+        </section>
     </div>
   );
 }

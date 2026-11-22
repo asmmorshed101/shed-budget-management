@@ -27,6 +27,7 @@ public class DashboardService {
     private final ProjectRepository projectRepository;
     private final ProjectExpenditureHistoryRepository projectHistoryRepository;
     private final OfficeExpenditureHistoryRepository officeHistoryRepository;
+    private final CategoryExpenditureHistoryRepository categoryHistoryRepository;
     private final OrganizationRepository organizationRepository;
 
     public DashboardService(
@@ -37,6 +38,7 @@ public class DashboardService {
             ProjectRepository projectRepository,
             ProjectExpenditureHistoryRepository projectHistoryRepository,
             OfficeExpenditureHistoryRepository officeHistoryRepository,
+            CategoryExpenditureHistoryRepository categoryHistoryRepository,
             OrganizationRepository organizationRepository) {
 
         this.budgetRepository = budgetRepository;
@@ -46,6 +48,7 @@ public class DashboardService {
         this.projectRepository = projectRepository;
         this.projectHistoryRepository = projectHistoryRepository;
         this.officeHistoryRepository = officeHistoryRepository;
+        this.categoryHistoryRepository = categoryHistoryRepository;
         this.organizationRepository = organizationRepository;
     }
 
@@ -73,6 +76,7 @@ public class DashboardService {
         BigDecimal operationalExpenditure = ZERO;
 
         BigDecimal sedpBudget = ZERO;
+        BigDecimal sedpExpenditure = ZERO;
 
         BigDecimal developmentBudget = ZERO;
         BigDecimal developmentExpenditure = ZERO;
@@ -94,6 +98,8 @@ public class DashboardService {
 
             if ("SEDP".equals(category.getCategoryCode())) {
                 sedpBudget = categoryBudget;
+                sedpExpenditure = categoryExpenditureAsOf(category.getId(), asOfDate);
+                categoryExpenditure = sedpExpenditure;
             }
 
             for (CategoryBudgetSource source :
@@ -163,7 +169,7 @@ public class DashboardService {
         }
 
         BigDecimal totalExpenditure =
-                operationalExpenditure.add(developmentExpenditure);
+                operationalExpenditure.add(sedpExpenditure).add(developmentExpenditure);
 
         BigDecimal remaining =
                 budget.getTotalAmount().subtract(totalExpenditure);
@@ -187,6 +193,7 @@ public class DashboardService {
                 operationalBudget,
                 operationalExpenditure,
                 sedpBudget,
+                sedpExpenditure,
                 developmentBudget,
                 developmentExpenditure,
                 developmentAdpBudget,
@@ -195,6 +202,19 @@ public class DashboardService {
                 developmentBlockExpenditure,
                 summaries
         );
+    }
+
+    private BigDecimal categoryExpenditureAsOf(Long categoryId, LocalDate date) {
+        Map<Long, CategoryExpenditureHistory> latestByHead = new HashMap<>();
+        for (CategoryExpenditureHistory record : categoryHistoryRepository
+                .findByCategoryIdOrderByReportDateDescIdDesc(categoryId)) {
+            if (!record.getReportDate().isAfter(date)) {
+                latestByHead.putIfAbsent(record.getExpenseHeadId(), record);
+            }
+        }
+        return latestByHead.values().stream()
+                .map(CategoryExpenditureHistory::getCumulativeAmount)
+                .reduce(ZERO, BigDecimal::add);
     }
 
     private BigDecimal projectExpenditureAsOf(

@@ -19,6 +19,7 @@ public record DashboardSummaryResponse(
         BigDecimal operationalExpenditure,
 
         BigDecimal sedpBudget,
+        BigDecimal sedpExpenditure,
 
         BigDecimal developmentBudget,
         BigDecimal developmentExpenditure,
